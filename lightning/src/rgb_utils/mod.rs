@@ -17,6 +17,7 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::psbt::{ExtractTxError, Psbt};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::TxOut;
+pub use rgb_lib::AssetSchema as RgbAssetSchema;
 use rgb_lib::{
 	bitcoin::psbt::Psbt as RgbLibPsbt,
 	wallet::{
