@@ -58,7 +58,7 @@ use crate::ln::msgs::PartialSignatureWithNonce;
 use crate::ln::msgs::{UnsignedChannelAnnouncement, UnsignedGossipMessage};
 use crate::ln::script::ShutdownScript;
 use crate::offers::invoice::UnsignedBolt12Invoice;
-use crate::rgb_utils::color_htlc;
+use crate::rgb_utils::{color_htlc, RgbFilesystemKVStore};
 use crate::types::features::ChannelTypeFeatures;
 use crate::types::payment::PaymentPreimage;
 use crate::util::async_poll::AsyncResult;
@@ -1568,7 +1568,8 @@ impl EcdsaChannelSigner for InMemorySigner {
 				&keys.revocation_key,
 			);
 			if commitment_tx.is_colored() {
-				if let Err(_e) = color_htlc(&mut htlc_tx, htlc, &self.ldk_data_dir) {
+				let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+				if let Err(_e) = color_htlc(&mut htlc_tx, htlc, &kv_store, Some(self.ldk_data_dir.as_path())) {
 					return Err(());
 				}
 			}

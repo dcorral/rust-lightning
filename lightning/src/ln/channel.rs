@@ -78,9 +78,9 @@ use crate::ln::types::ChannelId;
 use crate::ln::LN_MAX_MSG_LEN;
 use crate::offers::static_invoice::StaticInvoice;
 use crate::rgb_utils::{
-	color_closing, color_commitment, color_htlc, get_rgb_channel_info_path,
-	get_rgb_channel_info_pending, parse_rgb_channel_info, rename_rgb_files,
-	update_rgb_channel_amount_pending,
+	color_closing, color_commitment, color_htlc, get_rgb_channel_info,
+	get_rgb_channel_info_path, parse_rgb_channel_info, rename_rgb_files,
+	update_rgb_channel_amount_pending, RgbFilesystemKVStore,
 };
 use crate::routing::gossip::NodeId;
 use crate::sign::ecdsa::EcdsaChannelSigner;
@@ -3160,7 +3160,8 @@ where
 			holder_commitment_point.next_transaction_number(), &holder_commitment_point.next_point(),
 			true, false, logger);
 		if self.context().is_colored() {
-			color_commitment(&self.context(), &self.funding(), &mut commitment_data.tx, false).expect("successful commitment coloring");
+			let kv_store = RgbFilesystemKVStore::new(self.context().ldk_data_dir.clone());
+			color_commitment(&self.context(), &self.funding(), &mut commitment_data.tx, false, &kv_store, Some(self.context().ldk_data_dir.as_path())).expect("successful commitment coloring");
 		}
 		let initial_commitment_tx = commitment_data.tx;
 		let trusted_tx = initial_commitment_tx.trust();
@@ -3204,7 +3205,8 @@ where
 			context.counterparty_next_commitment_transaction_number,
 			&context.counterparty_next_commitment_point.unwrap(), false, false, logger);
 		if self.context().is_colored() {
-			color_commitment(&self.context(), &self.funding(), &mut commitment_data.tx, true).unwrap();
+			let kv_store = RgbFilesystemKVStore::new(self.context().ldk_data_dir.clone());
+			color_commitment(&self.context(), &self.funding(), &mut commitment_data.tx, true, &kv_store, Some(self.context().ldk_data_dir.as_path())).unwrap();
 		}
 		let counterparty_initial_commitment_tx = commitment_data.tx;
 		let counterparty_trusted_tx = counterparty_initial_commitment_tx.trust();
@@ -3232,7 +3234,8 @@ where
 		let temporary_channel_id = context.channel_id;
 		context.channel_id = channel_id;
 		if context.is_colored() {
-			rename_rgb_files(&context.channel_id, &temporary_channel_id, &context.ldk_data_dir);
+			let kv_store = RgbFilesystemKVStore::new(context.ldk_data_dir.clone());
+			rename_rgb_files(&context.channel_id, &temporary_channel_id, &kv_store, Some(context.ldk_data_dir.as_path()));
 		}
 
 		assert!(!context.channel_state.is_monitor_update_in_progress()); // We have not had any monitor(s) yet to fail update!
@@ -5022,7 +5025,8 @@ where
 			logger,
 		);
 		if self.is_colored() {
-			color_commitment(&self, &funding, &mut commitment_data.tx, false)
+			let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+			color_commitment(&self, &funding, &mut commitment_data.tx, false, &kv_store, Some(self.ldk_data_dir.as_path()))
 				.expect("successful commitment coloring");
 		}
 		let commitment_txid = {
@@ -5080,7 +5084,8 @@ where
 				&holder_keys.revocation_key,
 			);
 			if self.is_colored() {
-				color_htlc(&mut htlc_tx, htlc, &self.ldk_data_dir)
+				let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+				color_htlc(&mut htlc_tx, htlc, &kv_store, Some(self.ldk_data_dir.as_path()))
 					.expect("successful htlc coloring");
 			}
 
@@ -6345,7 +6350,8 @@ where
 			logger,
 		);
 		if self.is_colored() {
-			color_commitment(&self, &funding, &mut commitment_data.tx, true)
+			let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+			color_commitment(&self, &funding, &mut commitment_data.tx, true, &kv_store, Some(self.ldk_data_dir.as_path()))
 				.expect("successful commitment coloring");
 		}
 		let counterparty_initial_commitment_tx = commitment_data.tx;
@@ -7320,10 +7326,12 @@ where
 			funding_outpoint,
 		);
 		if self.context.is_colored() {
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
 			color_closing(
 				&self.context.channel_id,
 				&mut closing_transaction,
-				&self.context.ldk_data_dir,
+				&kv_store,
+				Some(self.context.ldk_data_dir.as_path()),
 			)
 			.expect("successful closing TX coloring");
 		}
@@ -8042,11 +8050,14 @@ where
 			)
 			.tx;
 		if self.context.is_colored() {
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
 			color_commitment(
 				&self.context,
 				&pending_splice_funding,
 				&mut counterparty_commitment_tx,
 				true,
+				&kv_store,
+				Some(self.context.ldk_data_dir.as_path()),
 			)
 			.expect("successful commitment coloring");
 		}
@@ -8910,11 +8921,13 @@ where
 		}
 
 		if self.context.is_colored() && (rgb_offered_htlc > 0 || rgb_received_htlc > 0) {
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
 			update_rgb_channel_amount_pending(
 				&self.context.channel_id,
 				rgb_offered_htlc,
 				rgb_received_htlc,
-				&self.context.ldk_data_dir,
+				&kv_store,
+				Some(self.context.ldk_data_dir.as_path()),
 			);
 		}
 
@@ -9648,7 +9661,8 @@ where
 				self.context.counterparty_next_commitment_transaction_number + 1,
 				&self.context.counterparty_next_commitment_point.unwrap(), false, false, logger);
 			if self.context.is_colored() {
-				color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true).expect("successful commitment coloring");
+				let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+				color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true, &kv_store, Some(self.context.ldk_data_dir.as_path())).expect("successful commitment coloring");
 			}
 			let counterparty_initial_commitment_tx = commitment_data.tx;
 			self.context.get_funding_signed_msg(&self.funding.channel_transaction_parameters, logger, counterparty_initial_commitment_tx)
@@ -11729,7 +11743,8 @@ where
 		let were_node_one = node_id.as_slice() < counterparty_node_id.as_slice();
 
 		let contract_id = if self.context.is_colored() {
-			let (rgb_info, _) = get_rgb_channel_info_pending(&self.context.channel_id, &self.context.ldk_data_dir);
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			let rgb_info = get_rgb_channel_info(&self.context.channel_id.0.as_hex().to_string(), &kv_store, Some(self.context.ldk_data_dir.as_path()), true);
 			Some(rgb_info.contract_id)
 		} else {
 			None
@@ -12883,7 +12898,8 @@ where
 			}
 		}
 		if self.context.is_colored() && rgb_received_htlc > 0 {
-			update_rgb_channel_amount_pending(&self.context.channel_id, 0, rgb_received_htlc, &self.context.ldk_data_dir);
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			update_rgb_channel_amount_pending(&self.context.channel_id, 0, rgb_received_htlc, &kv_store, Some(self.context.ldk_data_dir.as_path()));
 		}
 		if let Some((feerate, update_state)) = self.context.pending_update_fee {
 			if update_state == FeeUpdateState::AwaitingRemoteRevokeToAnnounce {
@@ -12970,7 +12986,8 @@ where
 			&self.context.counterparty_next_commitment_point.unwrap(), false, true, logger,
 		);
 		if self.context.is_colored() {
-			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true).expect("successful commitment coloring");
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true, &kv_store, Some(self.context.ldk_data_dir.as_path())).expect("successful commitment coloring");
 		}
 		let counterparty_commitment_tx = commitment_data.tx;
 
@@ -13007,7 +13024,8 @@ where
 			&self.context.counterparty_next_commitment_point.unwrap(), false, true, logger,
 		);
 		if self.context.is_colored() {
-			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true)?;
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true, &kv_store, Some(self.context.ldk_data_dir.as_path()))?;
 		}
 		let counterparty_commitment_tx = commitment_data.tx;
 
@@ -13608,7 +13626,8 @@ where
 			self.context.counterparty_next_commitment_transaction_number,
 			&self.context.counterparty_next_commitment_point.unwrap(), false, false, logger);
 		if self.context.is_colored() {
-			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true).unwrap();
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			color_commitment(&self.context, &self.funding, &mut commitment_data.tx, true, &kv_store, Some(self.context.ldk_data_dir.as_path())).unwrap();
 		}
 		let counterparty_initial_commitment_tx = commitment_data.tx;
 		let signature = match &self.context.holder_signer {
@@ -13672,7 +13691,8 @@ where
 		let temporary_channel_id = self.context.channel_id;
 		self.context.channel_id = ChannelId::v1_from_funding_outpoint(funding_txo);
 		if self.context.is_colored() {
-			rename_rgb_files(&self.context.channel_id, &temporary_channel_id, &self.context.ldk_data_dir);
+			let kv_store = RgbFilesystemKVStore::new(self.context.ldk_data_dir.clone());
+			rename_rgb_files(&self.context.channel_id, &temporary_channel_id, &kv_store, Some(self.context.ldk_data_dir.as_path()));
 		}
 
 		// If the funding transaction is a coinbase transaction, we need to set the minimum depth to 100.

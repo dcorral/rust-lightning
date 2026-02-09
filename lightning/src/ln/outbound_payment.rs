@@ -28,6 +28,7 @@ use crate::offers::nonce::Nonce;
 use crate::offers::static_invoice::StaticInvoice;
 use crate::rgb_utils::{
 	filter_first_hops, get_rgb_payment_info_path, is_payment_rgb, parse_rgb_payment_info,
+	RgbFilesystemKVStore,
 };
 use crate::routing::router::{
 	BlindedTail, InFlightHtlcs, Path, PaymentParameters, Route, RouteParameters,
@@ -1047,8 +1048,9 @@ where
 		}
 
 		let mut filtered_first_hops = first_hops.into_iter().collect::<Vec<_>>();
-		let rgb_payment = is_payment_rgb(&self.ldk_data_dir, &payment_hash).then(|| {
-			filter_first_hops(&self.ldk_data_dir, &payment_hash, &mut filtered_first_hops)
+		let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+		let rgb_payment = is_payment_rgb(&kv_store, &payment_hash, Some(self.ldk_data_dir.as_path())).then(|| {
+			filter_first_hops(&kv_store, &payment_hash, &mut filtered_first_hops, Some(self.ldk_data_dir.as_path()))
 		});
 		let mut route_params = RouteParameters::from_payment_params_and_value(
 			PaymentParameters::from_bolt12_invoice(&invoice)
@@ -1556,8 +1558,9 @@ where
 		SP: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
 		let mut filtered_first_hops = first_hops.into_iter().collect::<Vec<_>>();
-		is_payment_rgb(&self.ldk_data_dir, &payment_hash).then(|| {
-			filter_first_hops(&self.ldk_data_dir, &payment_hash, &mut filtered_first_hops)
+		let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+		is_payment_rgb(&kv_store, &payment_hash, Some(self.ldk_data_dir.as_path())).then(|| {
+			filter_first_hops(&kv_store, &payment_hash, &mut filtered_first_hops, Some(self.ldk_data_dir.as_path()))
 		});
 		let route = self.find_initial_route(
 			payment_id, payment_hash, &recipient_onion, keysend_preimage, None, &mut route_params, router,
@@ -1612,8 +1615,9 @@ where
 		}
 
 		let mut filtered_first_hops = first_hops.into_iter().collect::<Vec<_>>();
-		is_payment_rgb(&self.ldk_data_dir, &payment_hash).then(|| {
-			filter_first_hops(&self.ldk_data_dir, &payment_hash, &mut filtered_first_hops)
+		let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+		is_payment_rgb(&kv_store, &payment_hash, Some(self.ldk_data_dir.as_path())).then(|| {
+			filter_first_hops(&kv_store, &payment_hash, &mut filtered_first_hops, Some(self.ldk_data_dir.as_path()))
 		});
 
 		let mut route = match router.find_route_with_id(

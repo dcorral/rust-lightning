@@ -33,7 +33,7 @@ use crate::chain::chaininterface::{
 };
 use crate::chain::package::WEIGHT_REVOKED_OUTPUT;
 use crate::ln::msgs::DecodeError;
-use crate::rgb_utils::{color_htlc, is_tx_colored};
+use crate::rgb_utils::{color_htlc, is_tx_colored, RgbFilesystemKVStore};
 use crate::sign::EntropySource;
 use crate::types::payment::{PaymentHash, PaymentPreimage};
 use crate::util::ser::{Readable, ReadableArgs, RequiredWrapper, Writeable, Writer};
@@ -2167,7 +2167,8 @@ impl<'a> TrustedCommitmentTransaction<'a> {
 			assert!(this_htlc.transaction_output_index.is_some());
 			let mut htlc_tx = build_htlc_transaction(&txid, inner.feerate_per_kw, channel_parameters.contest_delay(), &this_htlc, &self.channel_type_features, &keys.broadcaster_delayed_payment_key, &keys.revocation_key);
 			if inner.is_colored() {
-				if let Err(_e) = color_htlc(&mut htlc_tx, this_htlc, ldk_data_dir) {
+				let kv_store = RgbFilesystemKVStore::new(ldk_data_dir.clone());
+				if let Err(_e) = color_htlc(&mut htlc_tx, this_htlc, &kv_store, Some(ldk_data_dir.as_path())) {
 					return Err(());
 				}
 			}

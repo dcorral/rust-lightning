@@ -121,7 +121,7 @@ use crate::onion_message::messenger::{
 use crate::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use crate::rgb_utils::{
 	get_rgb_channel_info, get_rgb_payment_info_path, handle_funding, is_channel_rgb,
-	parse_rgb_payment_info,
+	parse_rgb_payment_info, RgbFilesystemKVStore,
 };
 use crate::routing::router::{
 	BlindedTail, FixedRouter, InFlightHtlcs, Path, Payee, PaymentParameters, Route,
@@ -7556,9 +7556,11 @@ where
 									{
 										return None;
 									}
-									let (rgb_chan_info, _) = get_rgb_channel_info(
+									let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+									let rgb_chan_info = get_rgb_channel_info(
 										&chan.context.channel_id.0.as_hex().to_string(),
-										&self.ldk_data_dir,
+										&kv_store,
+										Some(self.ldk_data_dir.as_path()),
 										false,
 									);
 									if rgb_chan_info.contract_id == *cid
@@ -10387,7 +10389,8 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 				Some(Ok(inbound_chan)) => {
 					let logger = WithChannelContext::from(&self.logger, &inbound_chan.context, None);
 					if let Some(consignment_endpoint) = &inbound_chan.context.consignment_endpoint {
-						handle_funding(&msg.temporary_channel_id, msg.funding_txid.to_string(), &self.ldk_data_dir, consignment_endpoint.clone())?;
+						let kv_store = RgbFilesystemKVStore::new(self.ldk_data_dir.clone());
+						handle_funding(&msg.temporary_channel_id, msg.funding_txid.to_string(), &self.ldk_data_dir, consignment_endpoint.clone(), &kv_store)?;
 					}
 					match inbound_chan.funding_created(msg, best_block, &self.signer_provider, &&logger) {
 						Ok(res) => res,
