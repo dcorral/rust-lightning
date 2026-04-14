@@ -6,7 +6,6 @@ use crate::ln::chan_utils::{
 };
 use crate::ln::channel::{ChannelContext, ChannelError, FundingScope};
 use crate::ln::channel_state::ChannelDetails;
-use crate::ln::channelmanager::MsgHandleErrInternal;
 use crate::ln::types::ChannelId;
 use crate::sign::SignerProvider;
 use crate::types::features::ChannelTypeFeatures;
@@ -51,6 +50,8 @@ pub const WALLET_ACCOUNT_XPUB_VANILLA_FNAME: &str = "wallet_account_xpub_vanilla
 pub const WALLET_ACCOUNT_XPUB_COLORED_FNAME: &str = "wallet_account_xpub_colored";
 /// Name of the file containing the master fingerprint of the wallet
 pub const WALLET_MASTER_FINGERPRINT_FNAME: &str = "wallet_master_fingerprint";
+/// Name of the file containing the wallet reuse_addresses setting
+pub const WALLET_REUSE_ADDRESSES_FNAME: &str = "wallet_reuse_addresses";
 
 // kv_store namespace constants for RGB data persistence
 /// Primary namespace for all RGB data
@@ -161,9 +162,16 @@ fn _get_indexer_url(kv_store: &dyn KVStoreSync) -> String {
 	kv_store.read_config(INDEXER_URL_FNAME).expect("indexer_url must be in KVStore")
 }
 
+fn _get_reuse_addresses(kv_store: &dyn KVStoreSync) -> bool {
+	kv_store
+		.read_config(WALLET_REUSE_ADDRESSES_FNAME)
+		.map(|v| v == "true")
+		.unwrap_or(false)
+}
+
 fn _new_rgb_wallet(
 	data_dir: String, bitcoin_network: BitcoinNetwork, account_xpub_vanilla: String,
-	account_xpub_colored: String, master_fingerprint: String,
+	account_xpub_colored: String, master_fingerprint: String, reuse_addresses: bool,
 ) -> Wallet {
 	let keys = SinglesigKeys {
 		account_xpub_vanilla,
@@ -184,6 +192,7 @@ fn _new_rgb_wallet(
 				AssetSchema::Uda,
 				AssetSchema::Ifa,
 			],
+			reuse_addresses,
 		},
 		keys,
 	)
@@ -192,17 +201,18 @@ fn _new_rgb_wallet(
 
 fn _get_wallet_data(
 	ldk_data_dir: &Path, kv_store: &dyn KVStoreSync,
-) -> (String, BitcoinNetwork, String, String, String) {
+) -> (String, BitcoinNetwork, String, String, String, bool) {
 	let data_dir = ldk_data_dir.parent().unwrap().to_string_lossy().to_string();
 	let bitcoin_network = _get_bitcoin_network(kv_store);
 	let account_xpub_vanilla = _get_account_xpub_vanilla(kv_store);
 	let account_xpub_colored = _get_account_xpub_colored(kv_store);
 	let master_fingerprint = _get_master_fingerprint(kv_store);
-	(data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint)
+	let reuse_addresses = _get_reuse_addresses(kv_store);
+	(data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint, reuse_addresses)
 }
 
 async fn _get_rgb_wallet(ldk_data_dir: &Path, kv_store: &dyn KVStoreSync) -> Wallet {
-	let (data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint) =
+	let (data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint, reuse_addresses) =
 		_get_wallet_data(ldk_data_dir, kv_store);
 	tokio::task::spawn_blocking(move || {
 		_new_rgb_wallet(
@@ -211,6 +221,7 @@ async fn _get_rgb_wallet(ldk_data_dir: &Path, kv_store: &dyn KVStoreSync) -> Wal
 			account_xpub_vanilla,
 			account_xpub_colored,
 			master_fingerprint,
+			reuse_addresses,
 		)
 	})
 	.await
@@ -222,7 +233,7 @@ async fn _accept_transfer(
 	kv_store: &dyn KVStoreSync,
 ) -> Result<(RgbTransfer, Vec<Assignment>), RgbLibError> {
 	let funding_vout = 1;
-	let (data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint) =
+	let (data_dir, bitcoin_network, account_xpub_vanilla, account_xpub_colored, master_fingerprint, reuse_addresses) =
 		_get_wallet_data(ldk_data_dir, kv_store);
 	let indexer_url = _get_indexer_url(kv_store);
 	tokio::task::spawn_blocking(move || {
@@ -232,8 +243,9 @@ async fn _accept_transfer(
 			account_xpub_vanilla,
 			account_xpub_colored,
 			master_fingerprint,
+			reuse_addresses,
 		);
-		wallet.go_online(true, indexer_url).unwrap();
+		wallet.go_online(true, indexer_url)?;
 		wallet.accept_transfer(
 			funding_txid.clone(),
 			funding_vout,
@@ -618,7 +630,7 @@ pub(crate) fn rename_rgb_files(
 pub(crate) fn handle_funding(
 	temporary_channel_id: &ChannelId, funding_txid: String, ldk_data_dir: &Path,
 	consignment_endpoint: RgbTransport, push_asset_amount: Option<u64>, kv_store: &dyn KVStoreSync,
-) -> Result<(), MsgHandleErrInternal> {
+) -> Result<(), ChannelError> {
 	let handle = Handle::current();
 	let _ = handle.enter();
 	let accept_res = futures::executor::block_on(_accept_transfer(
@@ -630,35 +642,23 @@ pub(crate) fn handle_funding(
 	let (consignment, remote_rgb_assignments) = match accept_res {
 		Ok(res) => res,
 		Err(RgbLibError::InvalidConsignment) => {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close(
-				"Invalid RGB consignment for funding".to_owned(),
-				*temporary_channel_id,
-			))
+			return Err(ChannelError::close("Invalid RGB consignment for funding".to_owned()))
 		},
 		Err(RgbLibError::NoConsignment) => {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close(
-				"Failed to find RGB consignment".to_owned(),
-				*temporary_channel_id,
-			))
+			return Err(ChannelError::close("Failed to find RGB consignment".to_owned()))
 		},
 		Err(RgbLibError::UnknownRgbSchema { schema_id }) => {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close(
-				format!("Unknown RGB schema: {schema_id}"),
-				*temporary_channel_id,
-			))
+			return Err(ChannelError::close(format!("Unknown RGB schema: {schema_id}")))
 		},
 		Err(RgbLibError::UnsupportedSchema { asset_schema }) => {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close(
-				format!("Unsupported RGB schema: {asset_schema}"),
-				*temporary_channel_id,
-			))
+			return Err(ChannelError::close(format!("Unsupported RGB schema: {asset_schema}")))
 		},
-		Err(e) => {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close(
-				format!("Unexpected error: {e}"),
-				*temporary_channel_id,
-			))
+		Err(RgbLibError::Indexer { details })
+		| Err(RgbLibError::InvalidIndexer { details })
+		| Err(RgbLibError::Network { details }) => {
+			return Err(ChannelError::close(format!("Failed to connect to indexer: {details}")))
 		},
+		Err(e) => return Err(ChannelError::close(format!("Unexpected error: {e}"))),
 	};
 
 	let mut consignment_buf = Vec::new();
@@ -668,10 +668,10 @@ pub(crate) fn handle_funding(
 	kv_store.write_rgb_consignment(&temp_chan_id, consignment_buf);
 
 	if remote_rgb_assignments.len() != 1 {
-		return Err(MsgHandleErrInternal::send_err_msg_no_close(
-			format!("Unexpected number of RGB assignments: {}", remote_rgb_assignments.len()),
-			*temporary_channel_id,
-		));
+		return Err(ChannelError::close(format!(
+			"Unexpected number of RGB assignments: {}",
+			remote_rgb_assignments.len()
+		)));
 	}
 	let channel_rgb_amount = match remote_rgb_assignments[0] {
 		Assignment::Fungible(amt) => amt,
